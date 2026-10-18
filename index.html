@@ -11,14 +11,12 @@
   :root{
     --bg1:#0f766e;
     --bg2:#065f46;
-    --bg3:#0ea5e9;
     --card:#ffffff;
     --ink:#0f172a;
     --muted:#64748b;
     --line:#e2e8f0;
     --primary:#0d9488;
     --primary-dark:#0f766e;
-    --accent:#f59e0b;
   }
   *{box-sizing:border-box;}
   body{
@@ -233,7 +231,7 @@
         <button class="btn primary" onclick="openView('questions')">
           <span>👁</span> مشاهده در سایت
         </button>
-        <button class="btn ghost" onclick="downloadDoc('questions')">
+        <button class="btn ghost" onclick="downloadDocx('questions')">
           <span>⬇</span> دانلود فایل
         </button>
       </div>
@@ -249,7 +247,7 @@
         <button class="btn primary" onclick="openView('answers')">
           <span>👁</span> مشاهده در سایت
         </button>
-        <button class="btn ghost" onclick="downloadDoc('answers')">
+        <button class="btn ghost" onclick="downloadDocx('answers')">
           <span>⬇</span> دانلود فایل
         </button>
       </div>
@@ -258,7 +256,7 @@
   </main>
 
   <p class="hint">
-    فایل‌های دانلودی با فرمت Word (doc.) و کاملاً راست‌به‌چپ ساخته می‌شوند و در Word / WPS / Google Docs باز می‌شوند.
+    فایل‌های دانلودی با فرمت واقعی Word (docx.) و کاملاً راست‌به‌چپ ساخته می‌شوند و در Word / WPS / Google Docs بدون هیچ اخطاری باز می‌شوند.
   </p>
 </div>
 
@@ -385,66 +383,260 @@ function closeView(){
 document.addEventListener('keydown', e => { if(e.key === 'Escape') closeView(); });
 
 /* ============================================================
-   ساخت و دانلود فایل Word
+   تولید فایل واقعی DOCX (بدون کتابخانه خارجی)
    ============================================================ */
-function wordWrap(inner){
-  return `<html xmlns:o="urn:schemas-microsoft-com:office:office"
-                xmlns:w="urn:schemas-microsoft-com:office:word"
-                xmlns="http://www.w3.org/TR/REC-html40">
-  <head><meta charset="utf-8">
-  <title>زیست</title>
-  <!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View>
-  <w:Zoom>100</w:Zoom></w:WordDocument></xml><![endif]-->
-  <style>
-    @page{size:A4;margin:2cm 1.8cm;}
-    body{font-family:Tahoma,"B Nazanin",sans-serif;direction:rtl;color:#111;font-size:12pt;line-height:1.9;}
-    .head{text-align:center;border-bottom:2px solid #0d9488;padding-bottom:10px;margin-bottom:18px;}
-    .head h1{font-size:16pt;margin:0 0 6px;}
-    .head p{font-size:9.5pt;color:#555;margin:0;}
-    .q{font-weight:bold;margin:14px 0 6px;}
-    .opt{margin:2px 0 2px 0;padding-right:18px;font-size:11.5pt;}
-    table{border-collapse:collapse;width:100%;margin-top:10px;}
-    th,td{border:1px solid #999;padding:6px 8px;text-align:center;font-size:11.5pt;}
-    th{background:#e6fffb;}
-  </style></head><body>${inner}</body></html>`;
+const W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+
+const CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`;
+
+const RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`;
+
+/* --- خروجی امن XML --- */
+function esc(s){
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
 }
 
-function buildQuestionsDoc(){
-  let s = `<div class="head"><h1>سوالات تستی زیست</h1>
-    <p>${INFO.school} | دانش‌آموز: ${INFO.student} | دبیر: ${INFO.teacher}</p></div>`;
-  QUESTIONS.forEach(q => {
-    s += `<p class="q">${toFa(q.n)}) ${q.text}</p>`;
-    q.options.forEach(o => { s += `<p class="opt">${o}</p>`; });
-  });
-  return wordWrap(s);
-}
-
-function buildAnswersDoc(){
-  let s = `<div class="head"><h1>پاسخنامه سوالات تستی زیست</h1>
-    <p>${INFO.school} | دانش‌آموز: ${INFO.student} | دبیر: ${INFO.teacher}</p></div>
-    <table><tr><th>شماره سوال</th><th>پاسخ</th><th>شماره سوال</th><th>پاسخ</th></tr>`;
-  const keys = Object.keys(ANSWERS);
-  for(let i = 0; i < keys.length; i += 2){
-    const a = keys[i], b = keys[i+1];
-    s += `<tr><td>${toFa(a)}</td><td>${ANSWERS[a]}</td>` +
-         `<td>${b ? toFa(b) : ""}</td><td>${b ? ANSWERS[b] : ""}</td></tr>`;
+/* --- جدا کردن تگ‌های <u> برای خط‌کشی واقعی در Word --- */
+function splitUnderline(text){
+  const out = [];
+  const re = /<u>(.*?)<\/u>/g;
+  let last = 0, m;
+  while((m = re.exec(text))){
+    if(m.index > last) out.push({ t: text.slice(last, m.index), u:false });
+    out.push({ t: m[1], u:true });
+    last = re.lastIndex;
   }
-  s += `</table>`;
-  return wordWrap(s);
+  if(last < text.length) out.push({ t: text.slice(last), u:false });
+  if(!out.length) out.push({ t: text, u:false });
+  return out;
 }
 
-function downloadDoc(kind){
-  const html = kind === 'questions' ? buildQuestionsDoc() : buildAnswersDoc();
-  const name = kind === 'questions' ? 'سوالات تستی زیست' : 'پاسخنامه سوالات تستی زیست';
-  const blob = new Blob(['\ufeff' + html], {type:'application/msword;charset=utf-8'});
+/* --- ساخت ران‌ها (Run) با ترتیب صحیح عناصر rPr --- */
+function runs(text, o = {}){
+  const size  = o.size || 24;
+  const bold  = o.bold  ? '<w:b/><w:bCs/>' : '';
+  const color = o.color ? `<w:color w:val="${o.color}"/>` : '';
+  return splitUnderline(text).map(p => {
+    const u = p.u ? '<w:u w:val="single"/>' : '';
+    return `<w:r><w:rPr>`
+      + `<w:rFonts w:ascii="Tahoma" w:hAnsi="Tahoma" w:cs="Tahoma"/>`
+      + bold + color
+      + `<w:sz w:val="${size}"/><w:szCs w:val="${size}"/>`
+      + u + `<w:rtl/>`
+      + `</w:rPr><w:t xml:space="preserve">${esc(p.t)}</w:t></w:r>`;
+  }).join('');
+}
+
+/* --- ساخت پاراگراف راست‌به‌چپ --- */
+function para(text, o = {}){
+  const align  = o.align || 'right';
+  const before = o.before ? `<w:spacing w:before="${o.before}"/>` : '';
+  const indent = o.indent ? `<w:ind w:right="${o.indent}"/>` : '';
+  return `<w:p><w:pPr><w:bidi/>${before}${indent}<w:jc w:val="${align}"/></w:pPr>`
+       + runs(text, o) + `</w:p>`;
+}
+
+/* --- سلول جدول --- */
+function cell(text, o = {}){
+  const w     = o.w || 2400;
+  const shade = o.shade ? '<w:shd w:val="clear" w:color="auto" w:fill="E6FFFB"/>' : '';
+  return `<w:tc><w:tcPr><w:tcW w:w="${w}" w:type="dxa"/>${shade}<w:vAlign w:val="center"/></w:tcPr>`
+       + `<w:p><w:pPr><w:bidi/><w:jc w:val="center"/></w:pPr>`
+       + runs(text, { bold: o.bold, size: 22 })
+       + `</w:p></w:tc>`;
+}
+
+/* --- بدنه سند سوالات --- */
+function questionsBody(){
+  let x = '';
+  x += para('سوالات تستی زیست', { bold:true, size:32, align:'center' });
+  x += para(`${INFO.school} — دانش‌آموز: ${INFO.student} — دبیر: ${INFO.teacher}`,
+            { size:20, align:'center', color:'666666', before:60 });
+  QUESTIONS.forEach(q => {
+    x += para(`${toFa(q.n)}) ${q.text}`, { bold:true, size:24, before:240 });
+    q.options.forEach(o => { x += para(o, { size:22, indent:360 }); });
+  });
+  return x;
+}
+
+/* --- بدنه سند پاسخنامه --- */
+function answersBody(){
+  let x = '';
+  x += para('پاسخنامه سوالات تستی زیست', { bold:true, size:32, align:'center' });
+  x += para(`${INFO.school} — دانش‌آموز: ${INFO.student} — دبیر: ${INFO.teacher}`,
+            { size:20, align:'center', color:'666666', before:60 });
+
+  const keys = Object.keys(ANSWERS);
+  let rows = `<w:tr>`
+    + cell('شماره سوال', { bold:true, shade:true })
+    + cell('پاسخ',       { bold:true, shade:true })
+    + cell('شماره سوال', { bold:true, shade:true })
+    + cell('پاسخ',       { bold:true, shade:true })
+    + `</w:tr>`;
+
+  for(let i = 0; i < keys.length; i += 2){
+    const a = keys[i], b = keys[i + 1];
+    rows += `<w:tr>`
+      + cell(toFa(a))
+      + cell(ANSWERS[a], { bold:true })
+      + cell(b ? toFa(b) : '')
+      + cell(b ? ANSWERS[b] : '', { bold:true })
+      + `</w:tr>`;
+  }
+
+  const borders = '<w:tblBorders>'
+    + '<w:top w:val="single" w:sz="8" w:space="0" w:color="999999"/>'
+    + '<w:left w:val="single" w:sz="8" w:space="0" w:color="999999"/>'
+    + '<w:bottom w:val="single" w:sz="8" w:space="0" w:color="999999"/>'
+    + '<w:right w:val="single" w:sz="8" w:space="0" w:color="999999"/>'
+    + '<w:insideH w:val="single" w:sz="8" w:space="0" w:color="999999"/>'
+    + '<w:insideV w:val="single" w:sz="8" w:space="0" w:color="999999"/>'
+    + '</w:tblBorders>';
+
+  x += `<w:tbl><w:tblPr><w:bidiVisual/><w:tblW w:w="0" w:type="auto"/>`
+    + `<w:jc w:val="center"/>${borders}</w:tblPr>`
+    + `<w:tblGrid><w:gridCol w:w="2400"/><w:gridCol w:w="2400"/>`
+    + `<w:gridCol w:w="2400"/><w:gridCol w:w="2400"/></w:tblGrid>`
+    + rows + `</w:tbl>`;
+  return x;
+}
+
+/* --- ساخت کل document.xml --- */
+function buildDocumentXml(body){
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`
+    + `<w:document ${W_NS}><w:body>${body}`
+    + `<w:sectPr>`
+    + `<w:pgSz w:w="11906" w:h="16838"/>`
+    + `<w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="708" w:footer="708" w:gutter="0"/>`
+    + `<w:bidi/>`
+    + `</w:sectPr></w:body></w:document>`;
+}
+
+/* --- CRC32 برای ساخت ZIP --- */
+function crc32(bytes){
+  let crc = 0xFFFFFFFF;
+  for(let i = 0; i < bytes.length; i++){
+    crc ^= bytes[i];
+    for(let k = 0; k < 8; k++){
+      crc = (crc >>> 1) ^ (0xEDB88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+/* --- ساخت فایل ZIP (روش Store، بدون فشرده‌سازی) --- */
+function makeZip(files){
+  const enc = new TextEncoder();
+  const localChunks = [];
+  const centralChunks = [];
+  let offset = 0;
+
+  files.forEach(f => {
+    const nameBytes = enc.encode(f.name);
+    const data = f.data;
+    const crc = crc32(data);
+    const size = data.length;
+
+    /* Local file header */
+    const lh = new Uint8Array(30 + nameBytes.length);
+    const dv = new DataView(lh.buffer);
+    dv.setUint32(0, 0x04034b50, true);
+    dv.setUint16(4, 20, true);
+    dv.setUint16(6, 0x0800, true);   // UTF-8 flag
+    dv.setUint16(8, 0, true);        // method = store
+    dv.setUint16(10, 0, true);       // time
+    dv.setUint16(12, 0x21, true);    // date = 1980-01-01
+    dv.setUint32(14, crc, true);
+    dv.setUint32(18, size, true);
+    dv.setUint32(22, size, true);
+    dv.setUint16(26, nameBytes.length, true);
+    dv.setUint16(28, 0, true);
+    lh.set(nameBytes, 30);
+
+    localChunks.push(lh, data);
+
+    /* Central directory header */
+    const ch = new Uint8Array(46 + nameBytes.length);
+    const dv2 = new DataView(ch.buffer);
+    dv2.setUint32(0, 0x02014b50, true);
+    dv2.setUint16(4, 20, true);
+    dv2.setUint16(6, 20, true);
+    dv2.setUint16(8, 0x0800, true);
+    dv2.setUint16(10, 0, true);
+    dv2.setUint16(12, 0, true);
+    dv2.setUint16(14, 0x21, true);
+    dv2.setUint32(16, crc, true);
+    dv2.setUint32(20, size, true);
+    dv2.setUint32(24, size, true);
+    dv2.setUint16(28, nameBytes.length, true);
+    dv2.setUint16(30, 0, true);
+    dv2.setUint16(32, 0, true);
+    dv2.setUint16(34, 0, true);
+    dv2.setUint16(36, 0, true);
+    dv2.setUint32(38, 0, true);
+    dv2.setUint32(42, offset, true);
+    ch.set(nameBytes, 46);
+
+    centralChunks.push(ch);
+    offset += lh.length + size;
+  });
+
+  const centralSize = centralChunks.reduce((a, b) => a + b.length, 0);
+
+  const end = new Uint8Array(22);
+  const dv3 = new DataView(end.buffer);
+  dv3.setUint32(0, 0x06054b50, true);
+  dv3.setUint16(8, files.length, true);
+  dv3.setUint16(10, files.length, true);
+  dv3.setUint32(12, centralSize, true);
+  dv3.setUint32(16, offset, true);
+
+  return new Blob([...localChunks, ...centralChunks, end], {
+    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  });
+}
+
+/* --- دانلود نهایی --- */
+function downloadDocx(kind){
+  const enc = new TextEncoder();
+
+  const body = kind === 'questions' ? questionsBody() : answersBody();
+  const xml  = buildDocumentXml(body);
+
+  const files = [
+    { name: '[Content_Types].xml', data: enc.encode(CONTENT_TYPES) },
+    { name: '_rels/.rels',         data: enc.encode(RELS) },
+    { name: 'word/document.xml',   data: enc.encode(xml) }
+  ];
+
+  const blob = makeZip(files);
   const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
+
+  /* نام دقیق فایل — همان‌طور که خواستی */
+  const fileName = kind === 'questions'
+    ? 'سوالات تستی زیست.docx'
+    : 'پاسخنامه سوالات تستی زیست.docx';
+
+  const a = document.createElement('a');
   a.href = url;
-  a.download = name + '.doc';
+  a.download = fileName;
   document.body.appendChild(a);
   a.click();
   a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
+
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 </script>
 </body>
